@@ -40,7 +40,7 @@ log = logging.getLogger("VK_TIKTOK_BOT")
 # =======================
 # CONFIG
 # =======================
-TG_TOKEN = os.getenv("TG_TOKEN", "").strip()
+API_TOKEN = os.getenv("API_TOKEN", "").strip()
 VK_TOKEN_FALLBACK = os.getenv("VK_TOKEN", "").strip()
 
 DB_NAME = "vk_stories.db"
@@ -1279,14 +1279,14 @@ async def post_init(application: Application):
 
 
 def main():
-    if not TG_TOKEN:
-        print("TG_TOKEN не найден")
+    if not API_TOKEN:
+        print("API_TOKEN не найден")
         return
 
     log.info("Starting bot | build=%s | file=%s | pid=%s", APP_BUILD, __file__, os.getpid())
     log_dns_resolution("api.telegram.org")
 
-    app = Application.builder().token(TG_TOKEN).build()
+    app = Application.builder().token(API_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("checknow", checknow_cmd))
