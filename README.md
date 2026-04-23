@@ -1,12 +1,12 @@
 # stories-bot-bothost
 
-Deploy to Bothost using this repo URL:
+Deploy URL for Bothost:
 
 `https://github.com/daniilandreev1997-gif/stories-bot-bothost.git`
 
 ## Required env vars
-- `TG_TOKEN`
-- `VK_TOKEN` (optional fallback)
+- `API_TOKEN` (Telegram bot token)
+- `VK_TOKEN` (optional fallback for VK requests)
 
 ## Start
 `python runner.py`
