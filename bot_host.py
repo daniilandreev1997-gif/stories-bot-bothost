@@ -47,7 +47,8 @@ DB_NAME = "vk_stories.db"
 
 CHECK_INTERVAL_SECONDS = 2 * 60
 TOKEN_CHECK_SECONDS = 20 * 60
-TIKTOK_CHECK_SECONDS = 20 * 60
+TIKTOK_CHECK_SECONDS = 5 * 60
+TIKTOK_INITIAL_SYNC_GAP_SECONDS = 5 * 60
 TG_SEND_DELAY_SECONDS = 0.35
 
 SARATOV_TZ_NAME = "Europe/Saratov"
@@ -78,9 +79,7 @@ TIKTOK_USERNAME_RE = re.compile(r"^[A-Za-z0-9._]{2,40}$")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 SKIP_EXTENSIONS = {".part", ".ytdl", ".tmp", ".temp", ".json", ".description"}
-APP_BUILD = "dns-resilient-2026-04-23"
-TIKTOK_FALLBACK_RETRY_SECONDS = 12 * 60 * 60
-TIKTOK_FALLBACK_LAST_SENT: dict[tuple[int, str], int] = {}
+APP_BUILD = "tiktok-initial-sync-5min-2026-04-25"
 
 
 # =======================
@@ -115,7 +114,9 @@ def ensure_schema() -> None:
                 tg_id INTEGER PRIMARY KEY,
                 vk_id TEXT,
                 last_story_id TEXT,
-                tiktok_username TEXT
+                tiktok_username TEXT,
+                tiktok_initial_sync_done INTEGER DEFAULT 0,
+                tiktok_last_dispatch_ts INTEGER DEFAULT 0
             )
             """
         )
@@ -144,6 +145,10 @@ def ensure_schema() -> None:
         columns = {row[1] for row in cur.fetchall()}
         if "tiktok_username" not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN tiktok_username TEXT")
+        if "tiktok_initial_sync_done" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN tiktok_initial_sync_done INTEGER DEFAULT 0")
+        if "tiktok_last_dispatch_ts" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN tiktok_last_dispatch_ts INTEGER DEFAULT 0")
 
         conn.commit()
 
@@ -152,8 +157,17 @@ def ensure_user_row(cur: sqlite3.Cursor, tg_id: int) -> None:
     cur.execute("SELECT tg_id FROM users WHERE tg_id = ?", (tg_id,))
     if not cur.fetchone():
         cur.execute(
-            "INSERT INTO users (tg_id, vk_id, last_story_id, tiktok_username) VALUES (?, ?, ?, ?)",
-            (tg_id, None, None, None),
+            """
+            INSERT INTO users (
+                tg_id,
+                vk_id,
+                last_story_id,
+                tiktok_username,
+                tiktok_initial_sync_done,
+                tiktok_last_dispatch_ts
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (tg_id, None, None, None, 0, 0),
         )
 
 
@@ -219,6 +233,71 @@ def save_user_tiktok_username(tg_id: int, username: str) -> None:
         cur.execute(
             "UPDATE users SET tiktok_username = ? WHERE tg_id = ?",
             (username, tg_id),
+        )
+        conn.commit()
+
+
+def reset_tiktok_sync_state(tg_id: int) -> None:
+    with DB_LOCK:
+        cur = conn.cursor()
+        ensure_user_row(cur, tg_id)
+        cur.execute(
+            """
+            UPDATE users
+            SET tiktok_initial_sync_done = 0,
+                tiktok_last_dispatch_ts = 0
+            WHERE tg_id = ?
+            """,
+            (tg_id,),
+        )
+        conn.commit()
+
+
+def get_tiktok_sync_state(tg_id: int) -> tuple[bool, int]:
+    with DB_LOCK:
+        cur = conn.cursor()
+        ensure_user_row(cur, tg_id)
+        cur.execute(
+            """
+            SELECT tiktok_initial_sync_done, tiktok_last_dispatch_ts
+            FROM users
+            WHERE tg_id = ?
+            """,
+            (tg_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return False, 0
+    return bool(safe_int(row[0], 0)), safe_int(row[1], 0)
+
+
+def set_tiktok_sync_state(
+    tg_id: int,
+    *,
+    initial_sync_done: bool | None = None,
+    last_dispatch_ts: int | None = None,
+) -> None:
+    updates = []
+    params = []
+
+    if initial_sync_done is not None:
+        updates.append("tiktok_initial_sync_done = ?")
+        params.append(1 if initial_sync_done else 0)
+
+    if last_dispatch_ts is not None:
+        updates.append("tiktok_last_dispatch_ts = ?")
+        params.append(safe_int(last_dispatch_ts, 0))
+
+    if not updates:
+        return
+
+    with DB_LOCK:
+        cur = conn.cursor()
+        ensure_user_row(cur, tg_id)
+        params.append(tg_id)
+        cur.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE tg_id = ?",
+            tuple(params),
         )
         conn.commit()
 
@@ -890,32 +969,45 @@ async def check_and_send_new_tiktoks(app: Application, tg_id: int, username: str
 
     sent_ids = get_tiktok_sent_ids(tg_id)
     to_send = [post for post in posts if post.get("id") not in sent_ids]
+    initial_sync_done, last_dispatch_ts = get_tiktok_sync_state(tg_id)
+
     if not to_send:
+        if not initial_sync_done:
+            set_tiktok_sync_state(tg_id, initial_sync_done=True)
+            log.info("Первичная синхронизация TikTok завершена tg_id=%s username=%s", tg_id, username)
         return
 
-    log.info(
-        "Найдено новых TikTok постов tg_id=%s username=%s count=%s",
-        tg_id,
-        username,
-        len(to_send),
-    )
+    # Initial full sync mode: send exactly 1 post every 5 minutes.
+    if not initial_sync_done:
+        now = int(time.time())
+        if last_dispatch_ts and now - last_dispatch_ts < TIKTOK_INITIAL_SYNC_GAP_SECONDS:
+            return
 
+        post = to_send[0]
+        post_id = str(post.get("id", "")).strip()
+        if not post_id:
+            return
+
+        delivery_state = await send_tiktok_post(app, tg_id, username, post)
+        set_tiktok_sync_state(tg_id, last_dispatch_ts=int(time.time()))
+
+        # Even fallback is considered processed to avoid duplicate re-sends.
+        if delivery_state in ("media", "fallback"):
+            mark_tiktok_post_sent(tg_id, post_id)
+            if len(to_send) == 1:
+                set_tiktok_sync_state(tg_id, initial_sync_done=True)
+                log.info("Первичная синхронизация TikTok завершена tg_id=%s username=%s", tg_id, username)
+        return
+
+    # Normal mode after first full sync: only new posts.
+    log.info("Найдено новых TikTok постов tg_id=%s username=%s count=%s", tg_id, username, len(to_send))
     for post in to_send:
         post_id = str(post.get("id", "")).strip()
         if not post_id:
             continue
-
-        fallback_key = (tg_id, post_id)
-        last_fallback_sent_at = TIKTOK_FALLBACK_LAST_SENT.get(fallback_key, 0)
-        if last_fallback_sent_at and int(time.time()) - last_fallback_sent_at < TIKTOK_FALLBACK_RETRY_SECONDS:
-            continue
-
         delivery_state = await send_tiktok_post(app, tg_id, username, post)
-        if delivery_state == "media":
+        if delivery_state in ("media", "fallback"):
             mark_tiktok_post_sent(tg_id, post_id)
-            TIKTOK_FALLBACK_LAST_SENT.pop(fallback_key, None)
-        elif delivery_state == "fallback":
-            TIKTOK_FALLBACK_LAST_SENT[fallback_key] = int(time.time())
 
 
 # =======================
@@ -1051,6 +1143,7 @@ async def set_tiktok_username_from_text(update: Update, context: ContextTypes.DE
     save_user_tiktok_username(tg_id, username)
     if old_username != username:
         clear_tiktok_sent_for_user(tg_id)
+        reset_tiktok_sync_state(tg_id)
 
     reset_wait_state(context)
     await show_main_menu(
@@ -1190,9 +1283,7 @@ async def tiktokreset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clear_tiktok_sent_for_user(tg_id)
-    for key in list(TIKTOK_FALLBACK_LAST_SENT.keys()):
-        if key[0] == tg_id:
-            TIKTOK_FALLBACK_LAST_SENT.pop(key, None)
+    reset_tiktok_sync_state(tg_id)
     await show_main_menu(update, f"✅ Сбросил историю TikTok для @{username}. Запускаю повторную загрузку.")
     asyncio.create_task(check_and_send_new_tiktoks(context.application, tg_id, username))
 
