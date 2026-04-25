@@ -8,5 +8,9 @@ Deploy URL for Bothost:
 - `API_TOKEN` (Telegram bot token)
 - `VK_TOKEN` (optional fallback for VK requests)
 
+## TikTok sync behavior
+- First full sync: exactly 1 post every 5 minutes
+- After first full sync: only new posts
+
 ## Start
 `python runner.py`
