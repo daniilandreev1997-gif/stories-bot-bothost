@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from threading import Lock
 
-from telegram import Update, ReplyKeyboardMarkup, InputMediaPhoto
+from telegram import Update, ReplyKeyboardMarkup, InputMediaPhoto, InputMediaVideo
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 try:
@@ -776,6 +776,11 @@ def _download_tiktok_post_sync(post_url: str) -> dict:
         "fragment_retries": 4,
         "extractor_retries": 3,
         "socket_timeout": 30,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
 
     try:
@@ -796,7 +801,7 @@ def _download_tiktok_post_sync(post_url: str) -> dict:
             return {
                 "ok": True,
                 "kind": "video",
-                "files": [video_files[0]],
+                "files": video_files,
                 "tmp_dir": tmp_dir,
                 "post_id": post_id,
                 "timestamp": timestamp,
@@ -857,7 +862,7 @@ def build_tiktok_caption(username: str, url: str, timestamp: int) -> str:
     return "\n".join(lines)
 
 
-async def send_tiktok_photos(app: Application, tg_id: int, files: list[str], caption: str) -> None:
+async def send_tiktok_media_group(app: Application, tg_id: int, files: list[str], caption: str, kind: str) -> None:
     for offset in range(0, len(files), 10):
         chunk = files[offset:offset + 10]
         if not chunk:
@@ -868,9 +873,15 @@ async def send_tiktok_photos(app: Application, tg_id: int, files: list[str], cap
         try:
             for idx, handle in enumerate(handles):
                 if offset == 0 and idx == 0:
-                    media.append(InputMediaPhoto(media=handle, caption=caption))
+                    if kind == "video":
+                        media.append(InputMediaVideo(media=handle, caption=caption))
+                    else:
+                        media.append(InputMediaPhoto(media=handle, caption=caption))
                 else:
-                    media.append(InputMediaPhoto(media=handle))
+                    if kind == "video":
+                        media.append(InputMediaVideo(media=handle))
+                    else:
+                        media.append(InputMediaPhoto(media=handle))
 
             await app.bot.send_media_group(chat_id=tg_id, media=media)
         finally:
@@ -927,18 +938,21 @@ async def send_tiktok_post(app: Application, tg_id: int, username: str, post: di
         files = result.get("files") or []
 
         if kind == "video" and files:
-            with open(files[0], "rb") as video_handle:
-                await app.bot.send_video(
-                    chat_id=tg_id,
-                    video=video_handle,
-                    caption=caption,
-                    supports_streaming=True,
-                )
-            await asyncio.sleep(TG_SEND_DELAY_SECONDS)
+            if len(files) == 1:
+                with open(files[0], "rb") as video_handle:
+                    await app.bot.send_video(
+                        chat_id=tg_id,
+                        video=video_handle,
+                        caption=caption,
+                        supports_streaming=True,
+                    )
+                await asyncio.sleep(TG_SEND_DELAY_SECONDS)
+            else:
+                await send_tiktok_media_group(app, tg_id, files, caption, "video")
             return "media"
 
         if kind == "photos" and files:
-            await send_tiktok_photos(app, tg_id, files, caption)
+            await send_tiktok_media_group(app, tg_id, files, caption, "photos")
             return "media"
 
         return "fallback" if await send_tiktok_fallback(app, tg_id, username, webpage_url) else "failed"
