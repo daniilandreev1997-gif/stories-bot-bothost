@@ -40,7 +40,7 @@ log = logging.getLogger("VK_TIKTOK_BOT")
 # =======================
 # CONFIG
 # =======================
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
+API_TOKEN = os.getenv("API_TOKEN", "8332563760:AAHwcdimEgwfhoDp1FwNsQlFZX6SfQaJBuU").strip()
 VK_TOKEN_FALLBACK = os.getenv("VK_TOKEN", "").strip()
 
 DB_NAME = "vk_stories.db"
