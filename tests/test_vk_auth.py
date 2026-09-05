@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+import config
 import vk.auth
 from vk.auth import vk_direct_auth
 
@@ -20,6 +21,24 @@ AUTH_KWARGS = {
 }
 LOGIN = "test-user-login"
 PASSWORD = "test-user-password-SUPER-secret"
+
+
+class TestDefaultCredentials:
+    """Без явных кредов vk_direct_auth берёт значения из config (раунд 3).
+
+    Дефолт — публичные креды официального VK Android-клиента (2274003);
+    это публичные константы, не пользовательский секрет.
+    """
+
+    def test_defaults_come_from_config(self, captured):
+        captured["response"] = FakeResponse({"access_token": "tok-123", "user_id": 1})
+        result = asyncio.run(vk_direct_auth(LOGIN, PASSWORD))
+        assert result["ok"] is True
+        assert captured["data"]["client_id"] == config.VK_DIRECT_AUTH_CLIENT_ID
+        assert captured["data"]["client_secret"] == config.VK_DIRECT_AUTH_CLIENT_SECRET
+        assert captured["data"]["client_id"] == "2274003"
+        assert captured["data"]["client_secret"] == "hHbZxrka2uZ6jB1inYsH"
+        assert captured["data"]["grant_type"] == "password"
 
 
 class FakeResponse:

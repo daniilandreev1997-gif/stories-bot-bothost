@@ -5,6 +5,8 @@
 Секреты (пароль/токен/код) никогда не попадают в логи и тексты (TestNoSecrets).
 """
 import asyncio
+import importlib
+import os
 
 import pytest
 
@@ -27,6 +29,10 @@ LOGIN = "user_login@mail.tld"
 PASSWORD = "sup3r-SECRET-pa:ss"
 TOKEN = "vk1.a.ACCESS_TOKEN_value"
 CAPTCHA_URL = "https://api.vk.com/captcha.jpg?sid=42"
+
+# Публичные креды официального VK Android-клиента — дефолт config.py (НЕ секрет).
+VK_ANDROID_DEFAULT_CLIENT_ID = "2274003"
+VK_ANDROID_DEFAULT_CLIENT_SECRET = "hHbZxrka2uZ6jB1inYsH"
 
 
 # --- Фейки Telegram-объектов ---
@@ -75,6 +81,27 @@ def mock_auth(monkeypatch, result, calls):
 
 def run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture()
+def reload_config_vk():
+    """Env-кейсы гейта: сохраняет/восстанавливает VK-переменные и reload config.
+
+    config.py читает VK_DIRECT_AUTH_* и VK_LOGIN_ENABLED ПРИ импорте, поэтому
+    тесты env-состояний перезагружают модуль (по образцу test_config_validation).
+    После теста env и модуль возвращаются к исходному состоянию.
+    """
+    keys = ("VK_DIRECT_AUTH_CLIENT_ID", "VK_DIRECT_AUTH_CLIENT_SECRET", "VK_LOGIN_ENABLED")
+    saved = {key: os.environ.get(key) for key in keys}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        importlib.reload(config)
 
 
 OK_RESULT = {"ok": True, "access_token": TOKEN, "user_id": "456789"}
@@ -129,14 +156,14 @@ class TestParseVkLoginInput:
 
 # --- §8.2 Гейт ---
 class TestGate:
-    def test_gate_disabled_without_credentials(self, monkeypatch):
+    def test_gate_disabled_flag(self, monkeypatch):
         monkeypatch.setattr(config, "VK_LOGIN_ENABLED", False)
         update, context = make_update(), FakeContext()
         run(ask_vk_login(update, context))
         assert "временно недоступен" in last_reply(update)
         assert not any(context.user_data.get(k) for k in WAIT_STATE_KEYS)
 
-    def test_gate_enabled_with_credentials(self, monkeypatch):
+    def test_gate_enabled_flag(self, monkeypatch):
         monkeypatch.setattr(config, "VK_LOGIN_ENABLED", True)
         update, context = make_update(), FakeContext()
         run(ask_vk_login(update, context))
@@ -149,6 +176,70 @@ class TestGate:
         run(handle_text(update, context))
         assert "временно недоступен" in last_reply(update)
         assert not context.user_data.get("await_vk_login")
+
+
+class TestGateEnvDefaults:
+    """Гейт и креды через РЕАЛЬНЫЙ env (reload config): креды есть всегда.
+
+    С раунда 3 дефолт — публичные креды официального VK Android-клиента:
+    (a) пустые VK_DIRECT_AUTH_* -> флоу ВКЛЮЧЁН и вызов идёт с дефолтами;
+    (b) env VK_LOGIN_ENABLED='0' -> флоу выключен, wait-state не ставится;
+    (c) заданные env VK_DIRECT_AUTH_* -> используются они, не дефолт.
+    """
+
+    def test_empty_env_enabled_with_android_defaults(self, monkeypatch, db_isolated,
+                                                     reload_config_vk):
+        os.environ["VK_DIRECT_AUTH_CLIENT_ID"] = ""
+        os.environ["VK_DIRECT_AUTH_CLIENT_SECRET"] = ""
+        os.environ.pop("VK_LOGIN_ENABLED", None)
+        importlib.reload(config)
+
+        assert config.VK_LOGIN_ENABLED is True
+        assert config.VK_DIRECT_AUTH_CLIENT_ID == VK_ANDROID_DEFAULT_CLIENT_ID
+        assert config.VK_DIRECT_AUTH_CLIENT_SECRET == VK_ANDROID_DEFAULT_CLIENT_SECRET
+
+        calls = []
+        mock_auth(monkeypatch, OK_RESULT, calls)
+        monkeypatch.setattr(vk_flows, "vk_call", _mock_vk_call_ok())
+        update, context = make_update(), FakeContext()
+        run(ask_vk_login(update, context))
+        assert context.user_data.get("await_vk_login")
+
+        run(set_vk_login_from_text(update, context, f"{LOGIN}:{PASSWORD}"))
+        assert calls[0]["client_id"] == VK_ANDROID_DEFAULT_CLIENT_ID
+        assert calls[0]["client_secret"] == VK_ANDROID_DEFAULT_CLIENT_SECRET
+        assert db.get_vk_user_token(TG_ID) == TOKEN
+
+    def test_env_flag_zero_disables_flow(self, monkeypatch, reload_config_vk):
+        os.environ["VK_LOGIN_ENABLED"] = "0"
+        os.environ.pop("VK_DIRECT_AUTH_CLIENT_ID", None)
+        os.environ.pop("VK_DIRECT_AUTH_CLIENT_SECRET", None)
+        importlib.reload(config)
+
+        assert config.VK_LOGIN_ENABLED is False
+        update, context = make_update(BUTTON_VK_LOGIN), FakeContext()
+        run(handle_text(update, context))
+        assert "временно недоступен" in last_reply(update)
+        assert not any(context.user_data.get(k) for k in WAIT_STATE_KEYS)
+
+    def test_env_credentials_override_defaults(self, monkeypatch, db_isolated,
+                                                reload_config_vk):
+        os.environ["VK_DIRECT_AUTH_CLIENT_ID"] = "my-own-app-id"
+        os.environ["VK_DIRECT_AUTH_CLIENT_SECRET"] = "my-own-app-secret"
+        os.environ.pop("VK_LOGIN_ENABLED", None)
+        importlib.reload(config)
+
+        assert config.VK_LOGIN_ENABLED is True
+        assert config.VK_DIRECT_AUTH_CLIENT_ID == "my-own-app-id"
+
+        calls = []
+        mock_auth(monkeypatch, OK_RESULT, calls)
+        monkeypatch.setattr(vk_flows, "vk_call", _mock_vk_call_ok())
+        update, context = make_update(), FakeContext()
+        run(set_vk_login_from_text(update, context, f"{LOGIN}:{PASSWORD}"))
+        assert calls[0]["client_id"] == "my-own-app-id"
+        assert calls[0]["client_secret"] == "my-own-app-secret"
+        assert db.get_vk_user_token(TG_ID) == TOKEN
 
 
 # --- §8.3 Маппинг статусов ---

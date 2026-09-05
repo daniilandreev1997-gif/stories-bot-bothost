@@ -135,10 +135,24 @@ TIKTOK_MAX_MEDIA_PER_USER = _get_int("TIKTOK_MAX_MEDIA_PER_USER", 0)  # 0 = бе
 
 LOG_LEVEL = (os.getenv("LOG_LEVEL", "INFO").strip() or "INFO").upper()
 
-# --- Опциональные параметры для будущих сервисов (этап 2) --------------------
+# --- VK-вход по логину/паролю (direct auth) ----------------------------------
 
-VK_DIRECT_AUTH_CLIENT_ID = os.getenv("VK_DIRECT_AUTH_CLIENT_ID", "").strip()
-VK_DIRECT_AUTH_CLIENT_SECRET = os.getenv("VK_DIRECT_AUTH_CLIENT_SECRET", "").strip()
+# Публичные креды официального VK Android-клиента: константы, вшитые в
+# официальный APK и широко используемые в опенсорсе (vk_api и др.). Это НЕ
+# пользовательский секрет; при желании переопределяются env VK_DIRECT_AUTH_*.
+VK_ANDROID_PUBLIC_CLIENT_ID = "2274003"
+VK_ANDROID_PUBLIC_CLIENT_SECRET = "hHbZxrka2uZ6jB1inYsH"
+
+# Опционально: свои креды VK-приложения. Пусто/не задано -> публичные дефолты
+# выше (своё приложение нужно, только если публичные заблокированы VK).
+VK_DIRECT_AUTH_CLIENT_ID = (
+    os.getenv("VK_DIRECT_AUTH_CLIENT_ID", VK_ANDROID_PUBLIC_CLIENT_ID).strip()
+    or VK_ANDROID_PUBLIC_CLIENT_ID
+)
+VK_DIRECT_AUTH_CLIENT_SECRET = (
+    os.getenv("VK_DIRECT_AUTH_CLIENT_SECRET", VK_ANDROID_PUBLIC_CLIENT_SECRET).strip()
+    or VK_ANDROID_PUBLIC_CLIENT_SECRET
+)
 VK_DIRECT_AUTH_SCOPE = os.getenv("VK_DIRECT_AUTH_SCOPE", "stories").strip()
 INSTAGRAM_SESSIONS_DIR = os.getenv("INSTAGRAM_SESSIONS_DIR", "./ig_sessions").strip()
 TIKTOK_COOKIES_FILE = os.getenv("TIKTOK_COOKIES_FILE", "").strip()
@@ -186,13 +200,10 @@ TIKTOK_LOGIN_HEADLESS = (os.getenv("TIKTOK_LOGIN_HEADLESS", "1").strip() == "1")
 # только на время диалога входа; запись kind='password' краткоживуща и замещается
 # токеном (REPLACE-семантика vk_user_tokens). Значение никогда не логируется.
 VK_STORE_PASSWORD = (os.getenv("VK_STORE_PASSWORD", "0").strip() == "1")
-# Гейт VK-входа по логину/паролю: обе VK_DIRECT_AUTH_* непустые И нет явного
-# env-оверрайда VK_LOGIN_ENABLED=0 (симметрично TIKTOK_LOGIN_ENABLED выше).
-VK_LOGIN_ENABLED = (
-    os.getenv("VK_LOGIN_ENABLED", "1").strip() != "0"
-    and bool(VK_DIRECT_AUTH_CLIENT_ID)
-    and bool(VK_DIRECT_AUTH_CLIENT_SECRET)
-)
+# Гейт VK-входа по логину/паролю: креды есть всегда (дефолт — публичные креды
+# официального VK Android-клиента), поэтому флоу включён по умолчанию и
+# выключается ТОЛЬКО явным env-оверрайдом VK_LOGIN_ENABLED=0.
+VK_LOGIN_ENABLED = (os.getenv("VK_LOGIN_ENABLED", "1").strip() != "0")
 # ВАЖНО: TIKTOK_LOGIN_EMAIL / TIKTOK_LOGIN_PASSWORD глобально в config не читаются —
 # учётные данные хранятся per-user в БД (шифрование через crypto).
 
