@@ -15,6 +15,7 @@ BUTTON_SILENT = "Тихий режим"
 BUTTON_CLEAR_TOKEN = "Сброс VK token"
 BUTTON_TIKTOK_RESET = "Сброс TikTok истории"
 BUTTON_TIKTOK_LOGIN = "TikTok вход (логин+пароль)"
+BUTTON_VK_LOGIN = "🔑 VK вход по логину"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -22,10 +23,18 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [BUTTON_TOKEN_VK, BUTTON_CLEAR_TOKEN],
         [BUTTON_CHECK_NOW, BUTTON_LIST],
         [BUTTON_TIKTOK_RESET, BUTTON_SILENT],
-        [BUTTON_TIKTOK_LOGIN],
+        [BUTTON_TIKTOK_LOGIN, BUTTON_VK_LOGIN],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
 
-WAIT_STATE_KEYS = ("await_vk_id", "await_vk_token", "await_tiktok_username", "await_tiktok_login")
+WAIT_STATE_KEYS = (
+    "await_vk_id",
+    "await_vk_token",
+    "await_tiktok_username",
+    "await_tiktok_login",
+    "await_vk_login",
+    "await_vk_code",
+    "await_vk_captcha",
+)

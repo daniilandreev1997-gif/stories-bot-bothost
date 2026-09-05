@@ -22,6 +22,7 @@ from .keyboards import (
     BUTTON_TIKTOK_RESET,
     BUTTON_TOKEN_VK,
     BUTTON_VK_ID,
+    BUTTON_VK_LOGIN,
     MAIN_KEYBOARD,
     WAIT_STATE_KEYS,
 )
@@ -41,10 +42,14 @@ from .flows import (
     ask_tiktok_login,
     ask_tiktok_username,
     ask_vk_id,
+    ask_vk_login,
     ask_vk_token,
     set_tiktok_login_from_text,
     set_tiktok_username_from_text,
+    set_vk_captcha_from_text,
+    set_vk_code_from_text,
     set_vk_id_from_text,
+    set_vk_login_from_text,
     set_vk_token_from_text,
 )
 
@@ -59,6 +64,7 @@ __all__ = [
     "BUTTON_TIKTOK_RESET",
     "BUTTON_TOKEN_VK",
     "BUTTON_VK_ID",
+    "BUTTON_VK_LOGIN",
     "MAIN_KEYBOARD",
     "WAIT_STATE_KEYS",
     # handlers
@@ -77,8 +83,12 @@ __all__ = [
     "ask_vk_token",
     "ask_tiktok_login",
     "ask_tiktok_username",
+    "ask_vk_login",
     "set_vk_token_from_text",
     "set_vk_id_from_text",
     "set_tiktok_login_from_text",
     "set_tiktok_username_from_text",
+    "set_vk_login_from_text",
+    "set_vk_code_from_text",
+    "set_vk_captcha_from_text",
 ]

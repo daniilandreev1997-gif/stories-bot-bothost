@@ -19,13 +19,18 @@ from utils import normalize_tiktok_username
 from vk import check_token_works_for_stories, checknow_send_all_vk
 
 from .flows import (
+    _clear_vk_login_ctx,
     ask_tiktok_login,
     ask_tiktok_username,
     ask_vk_id,
+    ask_vk_login,
     ask_vk_token,
     set_tiktok_login_from_text,
     set_tiktok_username_from_text,
+    set_vk_captcha_from_text,
+    set_vk_code_from_text,
     set_vk_id_from_text,
+    set_vk_login_from_text,
     set_vk_token_from_text,
 )
 from .helpers import (
@@ -46,6 +51,7 @@ from .keyboards import (
     BUTTON_TIKTOK_RESET,
     BUTTON_TOKEN_VK,
     BUTTON_VK_ID,
+    BUTTON_VK_LOGIN,
 )
 from .messages import (
     checking_tiktok_text,
@@ -72,8 +78,14 @@ logger = logging.getLogger(__name__)
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start: сброс wait-state и справка по кнопкам/командам."""
+    """Команда /start: сброс wait-state, tmp-контекста VK-входа и справка.
+
+    /cancel в боте не зарегистрирован — универсальный сброс диалогов здесь:
+    _clear_vk_login_ctx удаляет vk_login_ctx (вместе с паролем из RAM)
+    и снимает wait-state.
+    """
     reset_wait_state(context)
+    _clear_vk_login_ctx(context)
     await show_main_menu(update, help_text())
 
 
@@ -230,6 +242,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_tiktok_login(update, context)
         return
 
+    if text == BUTTON_VK_LOGIN:
+        await ask_vk_login(update, context)
+        return
+
     # Awaited states
     if context.user_data.get("await_vk_id"):
         await set_vk_id_from_text(update, context, text)
@@ -245,6 +261,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("await_tiktok_login"):
         await set_tiktok_login_from_text(update, context, text)
+        return
+
+    if context.user_data.get("await_vk_login"):
+        await set_vk_login_from_text(update, context, text)
+        return
+
+    if context.user_data.get("await_vk_code"):
+        await set_vk_code_from_text(update, context, text)
+        return
+
+    if context.user_data.get("await_vk_captcha"):
+        await set_vk_captcha_from_text(update, context, text)
         return
 
     # Backward-compatible free text behavior

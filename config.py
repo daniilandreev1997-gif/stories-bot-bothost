@@ -43,7 +43,7 @@ def _load_env_file(path: Path) -> None:
     - отсутствие файла — warning в лог, не ошибка.
     """
     if not path.is_file():
-        logger.warning(".env не найден рядом с ботом: %s (используются переменные окружения)", path)
+        logger.warning("ℹ️ .env не обнаружен (это норма): %s — используются переменные окружения", path)
         return
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -101,9 +101,13 @@ STORIES_ENCRYPTION_KEY = os.getenv("STORIES_ENCRYPTION_KEY", "").strip()
 try:
     FERNET = Fernet(STORIES_ENCRYPTION_KEY)
 except Exception as exc:
+    # Диагностика crash-loop БЕЗ утечки значения: в сообщение попадают только
+    # длина значения и факт плейсхолдера из шаблона. Само значение не логируется.
     raise ValueError(
-        "STORIES_ENCRYPTION_KEY не является валидным Fernet-ключом. "
-        "Сгенерируй ключ командой: "
+        f"STORIES_ENCRYPTION_KEY не является валидным Fernet-ключом "
+        f"(получено символов: {len(STORIES_ENCRYPTION_KEY)}, "
+        f"looks_like_placeholder={STORIES_ENCRYPTION_KEY == 'replace_me'}; "
+        "значение не логируется). Сгенерируй ключ командой: "
         'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
     ) from exc
 
@@ -177,6 +181,18 @@ TIKTOK_RETRY_BACKOFF_MAX_SECONDS = _get_int("TIKTOK_RETRY_BACKOFF_MAX_SECONDS", 
 TIKTOK_LOGIN_ENABLED = (os.getenv("TIKTOK_LOGIN_ENABLED", "0").strip() == "1")
 # Headless-режим браузера для playwright-логина (1 = без окна).
 TIKTOK_LOGIN_HEADLESS = (os.getenv("TIKTOK_LOGIN_HEADLESS", "1").strip() == "1")
+
+# Хранить пароль VK после успешного входа (1 = да). По умолчанию 0: пароль нужен
+# только на время диалога входа; запись kind='password' краткоживуща и замещается
+# токеном (REPLACE-семантика vk_user_tokens). Значение никогда не логируется.
+VK_STORE_PASSWORD = (os.getenv("VK_STORE_PASSWORD", "0").strip() == "1")
+# Гейт VK-входа по логину/паролю: обе VK_DIRECT_AUTH_* непустые И нет явного
+# env-оверрайда VK_LOGIN_ENABLED=0 (симметрично TIKTOK_LOGIN_ENABLED выше).
+VK_LOGIN_ENABLED = (
+    os.getenv("VK_LOGIN_ENABLED", "1").strip() != "0"
+    and bool(VK_DIRECT_AUTH_CLIENT_ID)
+    and bool(VK_DIRECT_AUTH_CLIENT_SECRET)
+)
 # ВАЖНО: TIKTOK_LOGIN_EMAIL / TIKTOK_LOGIN_PASSWORD глобально в config не читаются —
 # учётные данные хранятся per-user в БД (шифрование через crypto).
 

@@ -9,7 +9,19 @@ db-функции вызываются с явным префиксом db (в �
 диалог «email:password» -> playwright-вход (tiktok.login) -> cookies
 сохраняются шифрованно (db.save_tiktok_session). Пароль/cookies никогда
 не логируются и не попадают в ответы.
+
+VK-вход по логину/паролю живёт в tg/vk_login_flows.py (файлы держим < 500
+строк); здесь только реэкспорт его публичных функций для обратной
+совместимости импортов ``from tg.flows import ...``.
 """
+from .vk_login_flows import (  # noqa: F401 — реэкспорт
+    _clear_vk_login_ctx,
+    _parse_vk_login_input,
+    ask_vk_login,
+    set_vk_captcha_from_text,
+    set_vk_code_from_text,
+    set_vk_login_from_text,
+)
 import asyncio
 import json
 import logging
