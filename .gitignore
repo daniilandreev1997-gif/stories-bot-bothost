@@ -3,5 +3,16 @@ __pycache__/
 *.pyo
 *.pyd
 *.db
+*.sqlite
+*.sqlite3
+cookies*
+.venv/
 *.lock
 *.pid
+bot.heartbeat
+.pytest_cache/
+
+# Secrets — never commit. Deploy .env manually to the hosting.
+.env
+*.session
+ig_sessions/
