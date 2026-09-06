@@ -191,6 +191,10 @@ TIKTOK_RETRY_BACKOFF_BASE_SECONDS = _get_float("TIKTOK_RETRY_BACKOFF_BASE_SECOND
 # Максимум паузы экспоненциального backoff, секунды.
 TIKTOK_RETRY_BACKOFF_MAX_SECONDS = _get_int("TIKTOK_RETRY_BACKOFF_MAX_SECONDS", 120)
 
+# Возраст (st_mtime) «осиротевших» tmp-каталогов скачивания TikTok
+# (префикс tiktok_post_), старше которого они удаляются sweep-утилитой.
+TIKTOK_TMP_SWEEP_MAX_AGE_SECONDS = _get_int("TIKTOK_TMP_SWEEP_MAX_AGE_SECONDS", 3600)
+
 # Включить вход в TikTok по логину/паролю (playwright, опционально; отдельная подзадача).
 TIKTOK_LOGIN_ENABLED = (os.getenv("TIKTOK_LOGIN_ENABLED", "0").strip() == "1")
 # Headless-режим браузера для playwright-логина (1 = без окна).

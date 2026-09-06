@@ -4,11 +4,18 @@
 - формат: bv*+ba/b (склейка через ffmpeg) с merge_output_format=mp4;
   если ffmpeg недоступен — прогрессивный одиночный формат b[ext=mp4]/b;
 - ffmpeg_location задаётся только если TIKTOK_FFMPEG_LOCATION реально существует;
-- tmp_dir создаётся в async-обёртке и передаётся в sync-функцию параметром:
-  при asyncio.wait_for-таймауте coroutine отменяется, finally гарантированно
-  удаляет tmp_dir;
 - download_tiktok_post возвращает expected_count для photo-постов
   (эвристика partial-доставки в monitoring).
+
+Контракт владения tmp_dir (фикс бага №2: каталог удалялся до отправки):
+- владелец каталога — точка обработки поста (send_tiktok_post в monitoring),
+  каталог живёт до завершения попытки отправки;
+- _download_tiktok_post_sync удаляет tmp_dir сам на fail-путях
+  (исключение / нет медиа); при успехе передаёт владение через
+  result["tmp_dir"];
+- download_tiktok_post НЕ удаляет каталог при asyncio.TimeoutError:
+  executor-поток ещё пишет — «осиротевший» каталог подбирает
+  sweep_stale_tiktok_tmp_dirs (вызывается в начале цикла мониторинга).
 """
 import asyncio
 import functools
@@ -16,6 +23,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import config
@@ -162,10 +170,13 @@ def _download_tiktok_post_sync(post_url: str, tmp_dir: str, cookiefile: str | No
 
     Возвращает dict: ok/kind/files/tmp_dir/post_id/timestamp/webpage_url/
     expected_count (для photos) либо ok=False + error.
-    tmp_dir НЕ удаляется здесь при успехе — очистка в async-обёртке (finally),
-    чтобы был безопасен wait_for-таймаут.
+
+    Владение tmp_dir (фикс бага №2): fail-пути (исключение / нет медиа /
+    yt-dlp не установлен) удаляют каталог здесь; при успехе каталог НЕ
+    удаляется — владение передаётся вызывающему через result["tmp_dir"].
     """
     if yt_dlp is None:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": False, "error": "yt-dlp не установлен", "webpage_url": post_url}
 
     ydl_opts = _build_ydl_opts(tmp_dir, cookiefile)
@@ -211,6 +222,8 @@ def _download_tiktok_post_sync(post_url: str, tmp_dir: str, cookiefile: str | No
                 "expected_count": max(0, expected_count),
             }
 
+        # Fail-путь: медиа не найдены — каталог никому не нужен, чистим сами.
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return {
             "ok": False,
             "error": "Не удалось определить медиафайлы в посте",
@@ -218,11 +231,65 @@ def _download_tiktok_post_sync(post_url: str, tmp_dir: str, cookiefile: str | No
         }
 
     except Exception as exc:
+        # Fail-путь: исключение — каталог чистим сами (поток уже завершился).
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return {
             "ok": False,
             "error": str(exc),
             "webpage_url": post_url,
         }
+
+
+def sweep_stale_tiktok_tmp_dirs(
+    max_age_seconds: int | None = None, base_dir: str | None = None
+) -> int:
+    """Удаляет «осиротевшие» tmp-каталоги скачивания (префикс tiktok_post_).
+
+    Фикс бага №2, вторая половина: при asyncio-таймауте каталог не удаляется
+    (executor-поток ещё пишет в него), поэтому такие каталоги подбираются
+    здесь по возрасту. Вызывается в начале цикла мониторинга
+    (tiktok.monitoring.check_and_send_new_tiktoks).
+
+    Args:
+        max_age_seconds: порог возраста по st_mtime (None ->
+            config.TIKTOK_TMP_SWEEP_MAX_AGE_SECONDS).
+        base_dir: каталог обхода (None -> tempfile.gettempdir()); параметр
+            для тестов, в проде каталоги создаются через tempfile.mkdtemp.
+
+    Returns:
+        Количество удалённых каталогов (rmtree с ignore_errors=True).
+    """
+    if max_age_seconds is None:
+        max_age_seconds = int(
+            getattr(config, "TIKTOK_TMP_SWEEP_MAX_AGE_SECONDS", 3600) or 3600
+        )
+
+    root = base_dir or tempfile.gettempdir()
+    cutoff = time.time() - max(0, int(max_age_seconds))
+    removed = 0
+
+    try:
+        entries = os.listdir(root)
+    except OSError as exc:
+        logger.warning("sweep tmp-dir: не удалось прочитать %s: %r", root, exc)
+        return 0
+
+    for name in entries:
+        if not name.startswith("tiktok_post_"):
+            continue
+        path = os.path.join(root, name)
+        try:
+            if not os.path.isdir(path) or os.path.islink(path):
+                continue
+            if os.stat(path).st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+        logger.info("sweep tmp-dir: удалён осиротевший каталог %s", path)
+
+    return removed
 
 
 async def download_tiktok_post(
@@ -232,9 +299,11 @@ async def download_tiktok_post(
 ) -> dict:
     """Асинхронная обёртка над _download_tiktok_post_sync (executor + wait_for).
 
-    tmp_dir создаётся здесь и удаляется в finally (в т.ч. при CancelledError
-    от asyncio.wait_for — cleanup гарантирован). При таймауте возвращается
-    ok=False, error="timeout <N>s".
+    Владение tmp_dir (фикс бага №2): каталог создаётся здесь; при успехе
+    владение передаётся вызывающему через result["tmp_dir"] (удаление —
+    в finally точки отправки, send_tiktok_post). При asyncio.TimeoutError
+    каталог НЕ удаляется: executor-поток продолжает писать — такой
+    «осиротевший» каталог подбирает sweep_stale_tiktok_tmp_dirs.
 
     cookiefile — опциональный путь к Netscape-файлу (per-user cookies);
     None -> используется глобальный config.TIKTOK_COOKIES_FILE.
@@ -245,19 +314,22 @@ async def download_tiktok_post(
         timeout_seconds = int(getattr(config, "TIKTOK_POST_TIMEOUT_SECONDS", 240) or 240)
 
     tmp_dir = tempfile.mkdtemp(prefix="tiktok_post_")
+    func = functools.partial(_download_tiktok_post_sync, post_url, tmp_dir, cookiefile)
     try:
-        func = functools.partial(_download_tiktok_post_sync, post_url, tmp_dir, cookiefile)
         return await asyncio.wait_for(
             loop.run_in_executor(None, func), timeout=timeout_seconds
         )
     except asyncio.TimeoutError:
+        # Каталог не удаляем: поток ещё пишет; sweep уберёт его по возрасту.
+        logger.warning(
+            "Таймаут скачивания TikTok (%ss): tmp_dir оставлен для sweep: %s",
+            timeout_seconds, tmp_dir,
+        )
         return {
             "ok": False,
             "error": f"timeout {timeout_seconds}s",
             "webpage_url": post_url,
         }
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def build_tiktok_caption(username: str, url: str, timestamp: int) -> str:

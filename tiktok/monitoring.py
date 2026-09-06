@@ -13,10 +13,18 @@
   неклеймленные посты остаются на следующий проход;
 - один неудачный пост не блокирует цикл (try/except на каждый пост);
 - единое structured-событие tiktok_delivery на пост (machine-parseable).
+
+Контракт владения tmp_dir (фикс бага №2: каталог удалялся до отправки):
+- send_tiktok_post — владелец tmp_dir: блок отправки в try/finally, в finally
+  shutil.rmtree(result["tmp_dir"], ignore_errors=True) — покрывает все исходы
+  (media/partial/fallback/failed/exception) и медиагруппы;
+- check_and_send_new_tiktoks вызывает sweep_stale_tiktok_tmp_dirs в начале
+  цикла (подчистка «осиротевших» каталогов после таймаутов скачивания).
 """
 import asyncio
 import logging
 import os
+import shutil
 import time
 
 from telegram import InputMediaPhoto, InputMediaVideo
@@ -26,7 +34,11 @@ import config
 import db
 from utils import chunk_media_groups, resolve_tiktok_cookiefile, safe_int
 
-from .download import build_tiktok_caption, download_tiktok_post
+from .download import (
+    build_tiktok_caption,
+    download_tiktok_post,
+    sweep_stale_tiktok_tmp_dirs,
+)
 from .extract import get_tiktok_posts
 from .login import cookies_json_to_netscape, save_cookies_to_temp
 
@@ -175,8 +187,10 @@ async def send_tiktok_post(
     if post_timeout_seconds is None:
         post_timeout_seconds = int(getattr(config, "TIKTOK_POST_TIMEOUT_SECONDS", 240) or 240)
 
-    # Скачивание (с ретраем) под общим таймаутом поста; tmp_dir чистится
-    # в download_tiktok_post (finally) — безопасно при wait_for-отмене.
+    # Скачивание (с ретраем) под общим таймаутом поста. Владение tmp_dir
+    # (фикс бага №2): при успехе каталог передаётся в result["tmp_dir"] и
+    # удаляется в finally НИЖЕ — после завершения попытки отправки
+    # (fail-пути скачивания чистят каталог сами, таймаут оставляет для sweep).
     try:
         result = await asyncio.wait_for(
             _download_with_retry(post_url, cookiefile), timeout=post_timeout_seconds
@@ -200,6 +214,7 @@ async def send_tiktok_post(
     caption = build_tiktok_caption(username, webpage_url, timestamp)
     kind = result.get("kind")
     files = result.get("files") or []
+    tmp_dir = str(result.get("tmp_dir") or "")
 
     try:
         if kind == "video" and files:
@@ -242,6 +257,11 @@ async def send_tiktok_post(
         if await _send_fallback_with_reason(app, tg_id, username, webpage_url, reason):
             return "fallback", reason
         return "failed", reason
+    finally:
+        # Владелец tmp_dir — эта точка: каталог живёт до завершения попытки
+        # отправки (все исходы: media/partial/fallback/failed/exception).
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def _process_post(
@@ -319,7 +339,18 @@ async def check_and_send_new_tiktoks(app: Application, tg_id: int, username: str
     Бюджет цикла: TIKTOK_CYCLE_TIMEOUT_SECONDS от начала прохода; при исчерпании
     неклеймленные посты остаются на следующий проход. Cookies: per-user из БД
     (приоритет) либо глобальный TIKTOK_COOKIES_FILE; tmp-файл удаляется в finally.
+
+    В начале цикла вызывается sweep_stale_tiktok_tmp_dirs: подчистка
+    «осиротевших» tmp-каталогов от предыдущих таймаутов скачивания.
     """
+    try:
+        removed = sweep_stale_tiktok_tmp_dirs()
+        if removed:
+            logger.info("sweep tmp-dir: подчистлено %d каталогов TikTok", removed)
+    except Exception:
+        # Sweep не должен ломать цикл мониторинга ни при каких условиях.
+        logger.exception("Ошибка sweep tmp-каталогов TikTok")
+
     deadline = time.monotonic() + int(
         getattr(config, "TIKTOK_CYCLE_TIMEOUT_SECONDS", 900) or 900
     )
