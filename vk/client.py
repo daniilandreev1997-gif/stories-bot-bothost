@@ -77,10 +77,16 @@ async def vk_call(method: str, params: dict):
 async def check_token_works_for_stories(vk_id_for_test: str | None = None):
     """Проверяет активный VK-токен: users.get + stories.get.
 
-    Возвращает (True, "ok") либо (False, причина). Токен берётся напрямую
-    из db.get_any_active_vk_token() ('' — токен не задан).
+    Возвращает (True, "ok") либо (False, причина). Токен и его ступень (tier)
+    берутся напрямую из db.get_any_active_vk_token_with_tier().
+
+    Фикс бага №1: при tier='service' и ошибке 28 (stories.get сервисным
+    токеном не работает) причина содержит понятную подсказку: пришлите
+    /token или войдите через /login. Интегрируется с token_watcher
+    (scheduler): уведомление только на переходе состояния.
     """
-    token = db.get_any_active_vk_token() or ""
+    token, tier = db.get_any_active_vk_token_with_tier()
+    token = token or ""
     if not token:
         return False, "VK токен не задан"
 
@@ -104,6 +110,12 @@ async def check_token_works_for_stories(vk_id_for_test: str | None = None):
         },
     )
     if not ok2:
-        return False, err2
+        reason = err2 or "VK error"
+        if tier == "service" and "VK error 28" in reason:
+            reason = (
+                f"{reason}: сервисный ключ приложения не может читать сторис. "
+                "Пришлите /token или войдите через /login"
+            )
+        return False, reason
 
     return True, "ok"

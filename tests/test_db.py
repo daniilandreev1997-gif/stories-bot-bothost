@@ -114,6 +114,51 @@ def test_get_any_active_vk_token_priority_user_token(db_isolated, monkeypatch):
     assert db.get_any_active_vk_token() == "only-user-token"
 
 
+def test_get_any_active_vk_token_service_tier(db_isolated, monkeypatch):
+    """Сервисная ступень: VK_TOKEN="" и user-токенов нет, VK_SERVICE_KEY задан."""
+    monkeypatch.setattr(config, "VK_TOKEN", "")
+    monkeypatch.setattr(config, "VK_SERVICE_KEY", "service-key-test")
+    assert db.get_any_active_vk_token() == "service-key-test"
+
+
+def test_get_any_active_vk_token_service_last_priority(db_isolated, monkeypatch):
+    """Сервисная ступень последняя: user-токен + сервисный -> побеждает user."""
+    db.save_vk_user_token(409, "user-token-1")
+    monkeypatch.setattr(config, "VK_TOKEN", "")
+    monkeypatch.setattr(config, "VK_SERVICE_KEY", "service-key-test")
+    assert db.get_any_active_vk_token() == "user-token-1"
+
+
+@pytest.mark.parametrize(
+    "which,expected_tier",
+    [
+        ("override", "override"),
+        ("config", "config"),
+        ("user", "user"),
+        ("service", "service"),
+        ("none", ""),
+    ],
+)
+def test_get_any_active_vk_token_with_tier_matrix(db_isolated, monkeypatch, which, expected_tier):
+    """Матрица ступеней get_any_active_vk_token_with_tier: override→config→user→service→none."""
+    monkeypatch.setattr(config, "VK_TOKEN", "config-token" if which == "config" else "")
+    monkeypatch.setattr(config, "VK_SERVICE_KEY", "service-key-test" if which == "service" else "")
+
+    if which == "override":
+        db.set_setting("vk_token_override", "override-token")
+    if which == "user":
+        db.save_vk_user_token(410, "user-token-2")
+
+    token, tier = db.get_any_active_vk_token_with_tier()
+
+    if expected_tier:
+        assert tier == expected_tier
+        assert token, f"tier={tier}: токен обязан возвращаться"
+    else:
+        assert tier == ""
+        assert token is None
+
+
 def test_delete_vk_user_token(db_isolated):
     db.save_vk_user_token(406, "to-be-deleted")
     db.delete_vk_user_token(406)

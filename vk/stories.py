@@ -20,13 +20,27 @@ from .client import vk_call
 logger = logging.getLogger(__name__)
 
 
-async def get_vk_stories(vk_id: str):
-    """Возвращает сторис VK-пользователя, отсортированные по дате ([] при отсутствии/ошибке)."""
+def _is_auth_reason(reason: str) -> bool:
+    """True, если причина похожа на авторизационную (error 28/5 и пр.)."""
+    text = str(reason or "").lower()
+    return ("vk error 28" in text or "vk error 5" in text
+            or "application authorization" in text or "authorization failed" in text)
+
+
+async def get_vk_stories_ex(vk_id: str) -> tuple[list, str]:
+    """Сторис VK-пользователя с причиной неудачи (фикс бага №1).
+
+    Возвращает (stories, reason): stories отсортированы по дате ([] при
+    отсутствии/ошибке), reason — человекочитаемая причина ('' при успехе).
+    На отсутствии токена и на VK-ошибке — logger.warning (не тихий []).
+    """
     token = db.get_any_active_vk_token() or ""
     if not token:
-        return []
+        reason = "VK токен не задан"
+        logger.warning("get_vk_stories: %s (vk_id=%s)", reason, vk_id)
+        return [], reason
 
-    ok, data, _ = await vk_call(
+    ok, data, err = await vk_call(
         "stories.get",
         {
             "v": "5.131",
@@ -35,18 +49,26 @@ async def get_vk_stories(vk_id: str):
         },
     )
     if not ok:
-        return []
+        reason = err or "VK error"
+        logger.warning("get_vk_stories: VK-ошибка (vk_id=%s): %s", vk_id, reason)
+        return [], reason
 
     response_obj = data.get("response", {})
     if response_obj.get("count", 0) <= 0:
-        return []
+        return [], ""
 
     items = response_obj.get("items", [])
     if not items:
-        return []
+        return [], ""
 
     stories = items[0].get("stories", [])
     stories.sort(key=lambda s: s.get("date", 0))
+    return stories, ""
+
+
+async def get_vk_stories(vk_id: str):
+    """Обёртка совместимости: только stories ([] при отсутствии/ошибке)."""
+    stories, _reason = await get_vk_stories_ex(vk_id)
     return stories
 
 
@@ -138,9 +160,30 @@ async def check_and_send_new_vk(app: Application, tg_id: int, vk_id: str, last_s
 
 
 async def checknow_send_all_vk(app: Application, tg_id: int, vk_id: str):
-    """Отправляет все текущие сторис по команде «Проверить сейчас»."""
-    stories = await get_vk_stories(vk_id)
+    """Отправляет все текущие сторис по команде «Проверить сейчас».
+
+    Фикс бага №1: при auth-причине (например, VK error 28 на сервисном токене)
+    пользователь получает причину и подсказку (пришлите /token или войдите
+    через /login), а не безликое «VK сторис сейчас нет».
+    """
+    stories, reason = await get_vk_stories_ex(vk_id)
     if not stories:
-        await app.bot.send_message(chat_id=tg_id, text="VK сторис сейчас нет (или VK не отдает).")
+        if reason and _is_auth_reason(reason):
+            await app.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    f"VK сторис недоступны: {reason}\n\n"
+                    "Токен не может читать сторис. Пришлите новый /token "
+                    "или войдите через /login (логин/пароль)."
+                ),
+            )
+        else:
+            await app.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    "VK сторис сейчас нет (или VK не отдает)."
+                    + (f"\nПричина: {reason}" if reason else "")
+                ),
+            )
         return
     await send_stories(app, tg_id, stories)

@@ -80,15 +80,40 @@ def delete_vk_user_token(tg_id: int) -> None:
         conn.commit()
 
 
-def get_any_active_vk_token() -> str | None:
-    """Активный VK-токен: settings override → config fallback → первый user token."""
+def get_any_active_vk_token_with_tier() -> tuple[str | None, str]:
+    """Активный VK-токен с указанием ступени (tier).
+
+    Приоритет ступеней: override → config (VK_TOKEN) → user-токен → service
+    (config.VK_SERVICE_KEY, последняя). tier ∈ {'override','config','user',
+    'service',''} — пустая строка означает, что ни одна ступень не дала токен.
+
+    Возвращает (token | None, tier).
+    """
     override = get_setting("vk_token_override").strip()
     if override:
-        return override
+        return override, "override"
+
     fallback = config.VK_TOKEN.strip()
     if fallback:
-        return fallback
+        return fallback, "config"
+
     with DB_LOCK:
         row = conn.execute("SELECT token_enc FROM vk_user_tokens WHERE token_kind = 'token' "
                            "ORDER BY tg_id LIMIT 1").fetchone()
-    return decrypt_str(row[0] or "") or None if row else None
+    user_token = decrypt_str(row[0] or "") or None if row else None
+    if user_token:
+        return user_token, "user"
+
+    # Последняя ступень: сервисный ключ приложения. stories.get им не
+    # работает (error_code=28), поэтому вызывающий код обязан явно
+    # деградировать (понятная причина, подсказка /token или /login).
+    service = config.VK_SERVICE_KEY.strip()
+    if service:
+        return service, "service"
+
+    return None, ""
+
+
+def get_any_active_vk_token() -> str | None:
+    """Активный VK-токен (без tier); делегирует get_any_active_vk_token_with_tier."""
+    return get_any_active_vk_token_with_tier()[0]

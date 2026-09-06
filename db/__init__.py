@@ -54,6 +54,7 @@ from .tiktok_claims import (
 from .vk_tokens import (
     delete_vk_user_token,
     get_any_active_vk_token,
+    get_any_active_vk_token_with_tier,
     get_vk_user_credentials,
     get_vk_user_token,
     save_vk_user_password,

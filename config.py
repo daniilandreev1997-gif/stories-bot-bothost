@@ -114,6 +114,16 @@ except Exception as exc:
 # --- Необязательные параметры (с безопасными дефолтами) ----------------------
 
 VK_TOKEN = os.getenv("VK_TOKEN", "").strip()
+
+# Креды VK-приложения владельца бота (фикс бага №1). Значения задаются только
+# через окружение (панель хостинга / .env), никогда не хардкодятся и не
+# логируются. VK_SERVICE_KEY — сервисный ключ приложения: последняя
+# fallback-ступень в цепочке VK-токенов (stories.get им не работает,
+# error_code=28, поэтому его использование сопровождается явной деградацией).
+VK_APP_ID = os.getenv("VK_APP_ID", "").strip()
+VK_SERVICE_KEY = os.getenv("VK_SERVICE_KEY", "").strip()
+VK_SECURE_KEY = os.getenv("VK_SECURE_KEY", "").strip()
+
 DB_PATH = os.getenv("DB_PATH", "vk_stories.db").strip() or "vk_stories.db"
 
 CHECK_INTERVAL_SECONDS = _get_int("CHECK_INTERVAL_SECONDS", 120)
@@ -143,17 +153,33 @@ LOG_LEVEL = (os.getenv("LOG_LEVEL", "INFO").strip() or "INFO").upper()
 VK_ANDROID_PUBLIC_CLIENT_ID = "2274003"
 VK_ANDROID_PUBLIC_CLIENT_SECRET = "hHbZxrka2uZ6jB1inYsH"
 
-# Опционально: свои креды VK-приложения. Пусто/не задано -> публичные дефолты
-# выше (своё приложение нужно, только если публичные заблокированы VK).
+# Опционально: свои креды VK-приложения. Приоритет дефолтов (фикс бага №1):
+# если VK_APP_ID и VK_SECURE_KEY заданы, а VK_DIRECT_AUTH_* в env НЕ заданы —
+# дефолтом direct-auth становятся креды приложения (минт user-токенов scope=stories
+# через vk/auth.py); иначе — прежние публичные Android-константы.
+_vk_app_default_id = (
+    VK_APP_ID if (VK_APP_ID and VK_SECURE_KEY) else VK_ANDROID_PUBLIC_CLIENT_ID
+)
+_vk_app_default_secret = (
+    VK_SECURE_KEY if (VK_APP_ID and VK_SECURE_KEY) else VK_ANDROID_PUBLIC_CLIENT_SECRET
+)
 VK_DIRECT_AUTH_CLIENT_ID = (
-    os.getenv("VK_DIRECT_AUTH_CLIENT_ID", VK_ANDROID_PUBLIC_CLIENT_ID).strip()
-    or VK_ANDROID_PUBLIC_CLIENT_ID
+    os.getenv("VK_DIRECT_AUTH_CLIENT_ID", _vk_app_default_id).strip()
+    or _vk_app_default_id
 )
 VK_DIRECT_AUTH_CLIENT_SECRET = (
-    os.getenv("VK_DIRECT_AUTH_CLIENT_SECRET", VK_ANDROID_PUBLIC_CLIENT_SECRET).strip()
-    or VK_ANDROID_PUBLIC_CLIENT_SECRET
+    os.getenv("VK_DIRECT_AUTH_CLIENT_SECRET", _vk_app_default_secret).strip()
+    or _vk_app_default_secret
 )
 VK_DIRECT_AUTH_SCOPE = os.getenv("VK_DIRECT_AUTH_SCOPE", "stories").strip()
+
+if VK_APP_ID:
+    logger.warning(
+        "VK: заданы креды приложения (VK_APP_ID) — они используются как дефолт "
+        "direct-auth%s; VK_SERVICE_KEY как последняя fallback-ступень токенов%s",
+        " (VK_SECURE_KEY также задан)" if (VK_APP_ID and VK_SECURE_KEY) else " (VK_SECURE_KEY не задан — дефолт остался публичным)",
+        " задан" if VK_SERVICE_KEY else " не задан",
+    )
 INSTAGRAM_SESSIONS_DIR = os.getenv("INSTAGRAM_SESSIONS_DIR", "./ig_sessions").strip()
 TIKTOK_COOKIES_FILE = os.getenv("TIKTOK_COOKIES_FILE", "").strip()
 

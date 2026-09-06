@@ -82,3 +82,57 @@ class TestEncryptionKeyValidation:
         plaintext = b"config-validation-roundtrip"
         token = config.FERNET.encrypt(plaintext)
         assert config.FERNET.decrypt(token) == plaintext
+
+
+class TestVkAppEnvVars:
+    """VK_APP_ID / VK_SERVICE_KEY / VK_SECURE_KEY: env -> поля, unset -> пустые строки.
+
+    Фикс бага №1: креды приложения (VK_APP_ID/VK_SECURE_KEY) используются как
+    дефолт direct-auth вместо публичных Android-констант; VK_SERVICE_KEY —
+    последняя fallback-ступень токенов (с явной деградацией, не тихий []).
+    """
+
+    def test_config_vk_app_env_vars(self, reload_config):
+        """env задан -> поля заполнены; unset -> пустые строки."""
+        os.environ["VK_APP_ID"] = "54425853"
+        os.environ["VK_SERVICE_KEY"] = "service-key-env-value"
+        os.environ["VK_SECURE_KEY"] = "secure-key-env-value"
+        try:
+            importlib.reload(config)
+            assert config.VK_APP_ID == "54425853"
+            assert config.VK_SERVICE_KEY == "service-key-env-value"
+            assert config.VK_SECURE_KEY == "secure-key-env-value"
+        finally:
+            os.environ.pop("VK_APP_ID", None)
+            os.environ.pop("VK_SERVICE_KEY", None)
+            os.environ.pop("VK_SECURE_KEY", None)
+            importlib.reload(config)
+            assert config.VK_APP_ID == ""
+            assert config.VK_SERVICE_KEY == ""
+            assert config.VK_SECURE_KEY == ""
+
+    def test_direct_auth_defaults_prefer_app_credentials(self, reload_config):
+        """VK_APP_ID+VK_SECURE_KEY заданы, VK_DIRECT_AUTH_* нет -> дефолты direct-auth = креды приложения.
+
+        Иначе (креды приложения пусты) — прежние публичные Android-дефолты
+        (совместимость с test_vk_login_flow.py::TestGateEnvDefaults).
+        """
+        # Кейс 1: VK_APP_ID+VK_SECURE_KEY заданы -> они становятся дефолтами direct-auth.
+        os.environ["VK_APP_ID"] = "app-777"
+        os.environ["VK_SECURE_KEY"] = "app-secret-777"
+        os.environ.pop("VK_DIRECT_AUTH_CLIENT_ID", None)
+        os.environ.pop("VK_DIRECT_AUTH_CLIENT_SECRET", None)
+        try:
+            importlib.reload(config)
+            assert config.VK_DIRECT_AUTH_CLIENT_ID == "app-777"
+            assert config.VK_DIRECT_AUTH_CLIENT_SECRET == "app-secret-777"
+        finally:
+            os.environ.pop("VK_APP_ID", None)
+            os.environ.pop("VK_SECURE_KEY", None)
+
+        # Кейс 2: креды приложения пусты -> прежние публичные Android-дефолты.
+        os.environ.pop("VK_DIRECT_AUTH_CLIENT_ID", None)
+        os.environ.pop("VK_DIRECT_AUTH_CLIENT_SECRET", None)
+        importlib.reload(config)
+        assert config.VK_DIRECT_AUTH_CLIENT_ID == "2274003"
+        assert config.VK_DIRECT_AUTH_CLIENT_SECRET == "hHbZxrka2uZ6jB1inYsH"
